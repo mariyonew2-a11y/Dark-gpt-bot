@@ -1,9 +1,10 @@
-import telebot
-import re
 import asyncio
-import time
-from pyrogram import Client
+import re
+import os
+from flask import Flask
 from threading import Thread
+from pyrogram import Client
+from telebot.async_telebot import AsyncTeleBot
 
 # --- [ CONFIGURATION ] ---
 API_ID = 34871644
@@ -13,80 +14,83 @@ SESSION_STR = "1BVtsOH0Bu5lnyEXPVEAuGyowSijpsUampMV1gWO2zntgmTIQluvoxgI2PAQ76K4R
 BOT_TOKEN = "8745018482:AAFkDT3Nv5TM5El2VlSPsCnbdGRHETfqAEY"
 TARGET_BOT = "Realwormgpt_bot"
 
-# Clients Initialize
-bot = telebot.TeleBot(BOT_TOKEN)
+# Clients Initialize (Async)
+bot = AsyncTeleBot(BOT_TOKEN)
 userbot = Client("DarkGPT_Userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STR)
 
-# --- [ STARTUP ] ---
-def start_userbot():
-    with userbot:
-        print("✅ Userbot Session Connected!")
-        # Keep userbot alive in the background
-        while True:
-            time.sleep(10)
+app = Flask('')
 
 # --- [ STEP 1: CUSTOM START MESSAGE ] ---
 @bot.message_handler(commands=['start'])
-def welcome(message):
+async def welcome(message):
     name = message.from_user.first_name
     design = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃        🔥 **DARK GPT v1.0** 🔥        ┃\n"
+        f"┃        🔥 **DARK GPT v1.1** 🔥        ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"Hii **{name}**, Main hoon **DARK GPT**—Tumhara ultimate AI companion jo kisi bhi limit ko nahi maanta! 💀\n\n"
         f"Mujhe engineered kiya hai **@beast\_harry** ne, taaki main tumhe wo access de sakoon jo baaki AI block karte hain.\n\n"
         f"🚀 **Main Kya Kar Sakta Hoon?**\n"
         f"• **Unrestricted Logic:** Ethical ho ya Unethical, hum har cheez pe khul ke discussion kar sakte hain. 🧠\n"
-        f"• **Deep Coding:** Complex scripts aur system architecture ka asli gyaan.\n"
-        f"• **Beast Speed:** Instant replies bina kisi 'Faltu Filters' ke.\n\n"
-        f"⚠️ **Note:** Main yahan tumhare dimaag ke har sawaal ka jawab dene ke liye hoon, chahe wo kitna bhi 'Dark' kyu na ho. 😉\n\n"
+        f"• **Deep Coding:** Complex scripts aur system architecture ka asli gyaan.\n\n"
+        f"⚠️ **Note:** Main yahan tumhare sawaalon ka jawab bina kisi 'Faltu Filters' ke deta hoon. 😉\n\n"
         f"┃ *Owner: @beast\_harry* ┃\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    bot.reply_to(message, design, parse_mode="Markdown")
+    await bot.reply_to(message, design, parse_mode="Markdown")
 
-# --- [ STEP 2: THE BRIDGE LOGIC ] ---
+# --- [ STEP 2: THE BRIDGE LOGIC (ASYNC) ] ---
 @bot.message_handler(func=lambda m: True)
-def handle_chat(message):
+async def handle_chat(message):
     user_query = message.text
     chat_id = message.chat.id
     
     # Status Message
-    bot.send_chat_action(chat_id, 'typing')
-    status_msg = bot.reply_to(message, "💀 **DARK GPT is Thinking...**", parse_mode="Markdown")
+    status_msg = await bot.reply_to(message, "💀 **DARK GPT is Thinking...**", parse_mode="Markdown")
 
-    async def fetch_from_target():
-        async with userbot:
-            # Target Bot ko query bhejo
-            await userbot.send_message(TARGET_BOT, user_query)
-            
-            # Wait for reply (polling history)
-            for _ in range(15): # Max 30 seconds wait
-                await asyncio.sleep(2)
-                async for msg in userbot.get_chat_history(TARGET_BOT, limit=1):
-                    # Check if response is from target bot and not our own query
-                    if msg.from_user and msg.from_user.username == TARGET_BOT:
-                        raw_text = msg.text or msg.caption
-                        if raw_text:
-                            # REBRANDING: Worm-GPT ko DARK GPT se replace karo
-                            final_res = re.sub(r'Worm-GPT|WormGPT', 'DARK GPT', raw_text, flags=re.IGNORECASE)
-                            
-                            # Final Response send karo
-                            try:
-                                bot.edit_message_text(final_res, chat_id, status_msg.message_id, parse_mode="Markdown")
-                            except:
-                                bot.edit_message_text(final_res, chat_id, status_msg.message_id)
-                            return True
-        return False
+    try:
+        if not userbot.is_connected:
+            await userbot.start()
 
-    # Run Async logic in a safe way
-    success = asyncio.run(fetch_from_target())
-    if not success:
-        bot.edit_message_text("❌ **Error:** Target bot response nahi de raha ya offline hai.", chat_id, status_msg.message_id)
+        # Target Bot ko query bhejo
+        await userbot.send_message(TARGET_BOT, user_query)
+        
+        # Wait for reply (polling history)
+        found = False
+        for _ in range(15): # Max 30 seconds wait
+            await asyncio.sleep(2)
+            async for msg in userbot.get_chat_history(TARGET_BOT, limit=1):
+                if msg.from_user and msg.from_user.username == TARGET_BOT:
+                    raw_text = msg.text or msg.caption
+                    if raw_text and user_query not in raw_text:
+                        # REBRANDING: Worm-GPT ko DARK GPT se replace karo
+                        final_res = re.sub(r'Worm-GPT|WormGPT', 'DARK GPT', raw_text, flags=re.IGNORECASE)
+                        
+                        await bot.edit_message_text(final_res, chat_id, status_msg.message_id)
+                        found = True
+                        break
+            if found: break
+        
+        if not found:
+            await bot.edit_message_text("❌ **Error:** Target bot response nahi de raha.", chat_id, status_msg.message_id)
 
-# --- [ SERVER START ] ---
+    except Exception as e:
+        await bot.edit_message_text(f"❌ **System Error:** {str(e)}", chat_id, status_msg.message_id)
+
+# --- [ WEB SERVER FOR RENDER ] ---
+@app.route('/')
+def home(): return "DARK_GPT_ONLINE"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+
+# --- [ MAIN RUNNER ] ---
+async def main():
+    print("✅ DARK GPT v1.1 is starting...")
+    # Start Flask in a separate thread
+    Thread(target=run_flask).start()
+    # Start Bot Polling
+    await bot.polling(non_stop=True)
+
 if __name__ == "__main__":
-    print("🚀 DARK GPT (Frontend) is starting...")
-    # Start Userbot thread
-    # Thread(target=start_userbot).start()
-    bot.infinity_polling()
+    asyncio.run(main())
