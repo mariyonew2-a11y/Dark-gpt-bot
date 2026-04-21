@@ -3,6 +3,7 @@ import asyncio
 import re
 import os
 import time
+import io
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telebot import types
@@ -21,118 +22,146 @@ app = Flask('')
 
 # --- [ CLEANER & BUTTON MIRROR LOGIC ] ---
 def dark_cleaner(text):
-    if not text: return "❌ No Response."
+    if not text: return None
     text = re.sub(r'Worm-GPT|WormGPT|Worm GPT', 'DARK GPT', text, flags=re.IGNORECASE)
     text = re.sub(r'@Realwormgpt_bot|@realwormgpt', '@x_dark_gpt_bot', text, flags=re.IGNORECASE)
     return text.strip()
 
 def markup_converter(reply_markup):
-    """Target Bot ke saare buttons churao"""
     if not reply_markup: return None
     markup = types.InlineKeyboardMarkup()
-    
-    # Check for both Inline and Reply keyboards
     rows = getattr(reply_markup, 'rows', [])
     for row in rows:
         btns = []
         for btn in row.buttons:
-            # Button text ko hi hum command bana denge
             btn_text = getattr(btn, 'text', None)
             if btn_text:
                 btns.append(types.InlineKeyboardButton(text=btn_text, callback_data=f"btn_{btn_text}"))
         if btns: markup.add(*btns)
     return markup if rows else None
 
-# --- [ CORE ENGINE - OSINT STYLE WITH BUTTON POLLING ] ---
+# --- [ CORE ENGINE - FETCH MEDIA, TEXT & BUTTONS ] ---
 async def fetch_dark_intel(query):
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.connect()
     try:
-        # 1. Message bhejo
         await client.send_message(TARGET_BOT, query)
         
-        # 2. Wait and Poll for response with buttons
-        final_text = ""
+        # 1. Output variables
+        final_caption = None
         final_btns = None
+        photo_buffer = None
         
-        for _ in range(15): # Max 30 seconds polling
+        # 2. Polling for response
+        for _ in range(15): # Max 30 seconds wait
             await asyncio.sleep(2)
             messages = await client.get_messages(TARGET_BOT, limit=1)
             if not messages: continue
             
             msg = messages[0]
-            # Agar message "Thinking" ya wahi query hai jo humne bheji, toh skip
             if msg.text == query or "thinking" in str(msg.text).lower():
                 continue
                 
-            # Response mil gaya
-            final_text = dark_cleaner(msg.text or msg.caption)
-            final_btns = markup_converter(msg.reply_markup)
+            # --- [ THE BEAST CATCH LOGIC ] ---
             
-            # Agar text mil gaya hai, toh break (chahe buttons ho ya na ho)
-            if final_text:
+            # Case 1: Photo aayi (Generate Image, Nude Image, Image Edit)
+            if msg.photo:
+                # Capture Caption & Rebrand
+                final_caption = dark_cleaner(msg.caption)
+                final_btns = markup_converter(msg.reply_markup)
+                
+                # Download photo to memory buffer (Render RAM Saver)
+                photo_buffer = io.BytesIO()
+                await client.download_media(msg.photo, file=photo_buffer)
+                photo_buffer.name = "dark_gpt_image.png"
+                photo_buffer.seek(0) # Reset buffer pointer
+                break
+                
+            # Case 2: Sirf Text aaya (Normal queries, Image Analysis)
+            raw_text = msg.text or msg.caption
+            if raw_text:
+                final_caption = dark_cleaner(raw_text)
+                final_btns = markup_converter(msg.reply_markup)
                 break
         
         await client.disconnect()
-        return final_text, final_btns
+        return final_caption, final_btns, photo_buffer
             
     except Exception as e:
         if client.is_connected(): await client.disconnect()
-        return f"❌ System Error: {str(e)}", None
+        return f"❌ System Error: {str(e)}", None, None
 
-# --- [ COMMANDS ] ---
+# --- [ CHAT HANDLER ] ---
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    # Pehle apna custom start message bhejo
     design = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃        🔥 **DARK GPT v1.6** 🔥        ┃\n"
+        f"┃        🔥 **DARK GPT v1.7** 🔥        ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"Hii **{message.from_user.first_name}**, Main hoon **DARK GPT**💀\n\n"
-        f"Saare features niche buttons mein aa jayenge. Wait karo... 😉\n\n"
+        f"Har limit ke pare logic aur art! 😉\n\n"
         f"┃ *Owner: @beast\\_harry* ┃\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    status_msg = bot.reply_to(message, design, parse_mode="Markdown")
-
-    # Piche se Target Bot ka /start menu uthao
+    # Start menu fetch logic (text only, usually)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    _, buttons = loop.run_until_complete(fetch_dark_intel("/start"))
+    _, buttons, _ = loop.run_until_complete(fetch_dark_intel("/start"))
     loop.close()
     
-    if buttons:
-        bot.edit_message_reply_markup(message.chat.id, status_msg.message_id, reply_markup=buttons)
+    bot.reply_to(message, design, parse_mode="Markdown", reply_markup=buttons)
 
 @bot.message_handler(func=lambda message: True)
 def handle_input(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    status_msg = bot.reply_to(message, "🛰 **DARK GPT is Decrypting...**", parse_mode="Markdown")
+    bot.send_chat_action(message.chat.id, 'upload_photo') # Uploading action
+    status_msg = bot.reply_to(message, "🛰 **DARK GPT is Processing...**", parse_mode="Markdown")
     
+    # OSINT style loop handling
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    final_output, buttons = loop.run_until_complete(fetch_dark_intel(message.text))
+    final_output, buttons, photo = loop.run_until_complete(fetch_dark_intel(message.text))
     loop.close()
     
-    try:
-        bot.edit_message_text(final_output, message.chat.id, status_msg.message_id, reply_markup=buttons)
-    except:
-        bot.edit_message_text(final_output, message.chat.id, status_msg.message_id)
+    # --- [ DISPLAY LOGIC ] ---
+    
+    # 1. Agar Photo response aaya (Image Generation)
+    if photo:
+        try:
+            # Thinking message delete karo
+            bot.delete_message(message.chat.id, status_msg.message_id)
+            
+            # Send photo from memory buffer
+            bot.send_photo(
+                message.chat.id, 
+                photo, 
+                caption=final_output, 
+                reply_markup=buttons, 
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            bot.reply_to(message, f"❌ Display Error: {str(e)}")
+            
+    # 2. Agar Text response aaya (Normal query)
+    elif final_output:
+        try:
+            bot.edit_message_text(final_output, message.chat.id, status_msg.message_id, reply_markup=buttons, parse_mode="Markdown")
+        except:
+            bot.edit_message_text(final_output, message.chat.id, status_msg.message_id)
+    else:
+        bot.edit_message_text("❌ System Timeout.", message.chat.id, status_msg.message_id)
 
+# --- [ BUTTON CLICKS ] ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("btn_"))
 def handle_button_click(call):
     button_text = call.data.replace("btn_", "")
     bot.answer_callback_query(call.id, f"Trigging: {button_text}")
-    
-    # User ke bihalf par wahi command process karo
     call.message.text = button_text
     handle_input(call.message)
 
 # --- [ RENDER SETUP ] ---
 @app.route('/')
-def home(): return "DARK_GPT_BUTTONS_POLLING"
+def home(): return "DARK_GPT_PHOTO_ACTIVE"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
