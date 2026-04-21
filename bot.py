@@ -3,7 +3,7 @@ import asyncio
 import re
 import os
 import time
-import io # Image buffer ke liye zaruri hai
+import io
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telebot import types
@@ -13,14 +13,14 @@ from threading import Thread
 # --- [ CONFIGURATION ] ---
 API_ID = 34871644
 API_HASH = '9ab73b2a48115feed25b5029c812ea29'
-SESSION_STR = "1BVtsOH0Bu5lnyEXPVEAuGyowSijpsUampMV1gWO2zntgmTIQluvoxgI2PAQ76K4RVeFWE3OlWQole-99hzjZ4bJdH9ew1VSHgib29jKWKAiAsGlYWIDFVhhwn1zPO1Ck7qoBajH_7RfFtEisEwrLYTlCVJmUklFMR1QFBoFbwq-1KeF7kQeeSBdJPKsTeqwMBSQfQySuc7JbQ_jj7ni18UPkV1laqHAKAWd_OZFoKsvJHa7f05oeOTozBSVrCFOrzK8UQN5gV3nDECvbIWfpFzzLT20HWYYGNL3v1Y1S0b1g0tk-uryzkQEgUCc3X4ej5cvUL80qfvmNgWfdPkE4kaZnmE2PsIo="
+SESSION_STR = "1BVtsOH0Bu5lnyEXPVEAuGyowSijpsUampMV1gWO2zntgmTIQluvoxgI2PAQ76K4RVeFWE3OlWQole-99hzjZ4bJdH9ew1VSHgib29jKWKAiAsGlYWIDFVhhwn1zPO1Ck7qoBajH_7RfFtEisEwrLYTlCVJmUklFMR1QFBoFbwq-1KeF7kQeeSBdJPKsTeqwMBSQfQ_jj7ni18UPkV1laqHAKAWd_OZFoKsvJHa7f05oeOTozBSVrCFOrzK8UQN5gV3nDECvbIWfpFzzLT20HWYYGNL3v1Y1S0b1g0tk-uryzkQEgUCc3X4ej5cvUL80qfvmNgWfdPkE4kaZnmE2PsIo="
 BOT_TOKEN = "8745018482:AAFkDT3Nv5TM5El2VlSPsCnbdGRHETfqAEY"
 TARGET_BOT = "@Realwormgpt_bot"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask('')
 
-# --- [ CLEANER & BUTTON MIRROR LOGIC ] ---
+# --- [ CLEANER & BUTTON MIRROR ] ---
 def dark_cleaner(text):
     if not text: return None
     text = re.sub(r'Worm-GPT|WormGPT|Worm GPT', 'DARK GPT', text, flags=re.IGNORECASE)
@@ -40,77 +40,81 @@ def markup_converter(reply_markup):
         if btns: markup.add(*btns)
     return markup if rows else None
 
-# --- [ CORE ENGINE - OSINT STYLE WITH IMAGE SUPPORT ] ---
+# --- [ CORE ENGINE - FIXED ID POLLING ] ---
 async def fetch_dark_intel(query):
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.connect()
     try:
-        await client.send_message(TARGET_BOT, query)
+        # 1. Message bhejo aur uski ID note karo
+        sent_msg = await client.send_message(TARGET_BOT, query)
+        query_id = sent_msg.id # Isse choti ID wala koi message nahi uthayenge
         
         final_text = ""
         final_btns = None
-        photo_buffer = None # Naya variable image ke liye
+        photo_buffer = None
         
-        for _ in range(20): # Max 40 seconds polling
+        # 2. Polling for NEW response (Max 45 seconds)
+        for _ in range(22): 
             await asyncio.sleep(2)
-            messages = await client.get_messages(TARGET_BOT, limit=1)
+            
+            # Latest 2 messages check karo taaki gap na rahe
+            messages = await client.get_messages(TARGET_BOT, limit=2)
             if not messages: continue
             
-            msg = messages[0]
-            raw_text = msg.text or msg.caption or ""
-            
-            # Skip Thinking or own query
-            if raw_text == query or "thinking" in str(raw_text).lower() or "⌛" in str(raw_text):
-                continue
-            
-            # --- [ IMAGE DETECTION LOGIC ] ---
-            if msg.photo:
-                final_text = dark_cleaner(msg.caption)
-                final_btns = markup_converter(msg.reply_markup)
-                
-                # Download photo to memory buffer (No local file saved)
-                photo_buffer = io.BytesIO()
-                await client.download_media(msg.photo, file=photo_buffer)
-                photo_buffer.name = "dark_gpt.png"
-                photo_buffer.seek(0)
-                break
-                
-            # --- [ TEXT DETECTION LOGIC ] ---
-            if raw_text:
-                final_text = dark_cleaner(raw_text)
-                final_btns = markup_converter(msg.reply_markup)
-                break
+            # Check messages in order
+            for msg in messages:
+                # Rule: Sirf wo message jo hamari query ke BAAD aaya hai
+                if msg.id > query_id:
+                    raw_content = msg.text or msg.caption or ""
+                    
+                    # Skip Thinking/Wait messages
+                    if "thinking" in str(raw_content).lower() or "⌛" in str(raw_content):
+                        continue
+                    
+                    # PHOTO DETECTED
+                    if msg.photo:
+                        final_text = dark_cleaner(msg.caption)
+                        final_btns = markup_converter(msg.reply_markup)
+                        photo_buffer = io.BytesIO()
+                        await client.download_media(msg.photo, file=photo_buffer)
+                        photo_buffer.name = "dark_gpt.png"
+                        photo_buffer.seek(0)
+                        await client.disconnect()
+                        return final_text, final_btns, photo_buffer
+                        
+                    # TEXT DETECTED
+                    if raw_content:
+                        final_text = dark_cleaner(raw_content)
+                        final_btns = markup_converter(msg.reply_markup)
+                        await client.disconnect()
+                        return final_text, final_btns, None
         
         await client.disconnect()
-        return final_text, final_btns, photo_buffer # Teeno return honge
+        return None, None, None
             
     except Exception as e:
         if client.is_connected(): await client.disconnect()
         return f"❌ System Error: {str(e)}", None, None
 
-# --- [ COMMANDS ] ---
+# --- [ HANDLERS ] ---
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.send_chat_action(message.chat.id, 'typing')
     design = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃        🔥 **DARK GPT v1.10** 🔥        ┃\n"
+        f"┃        🔥 **DARK GPT v1.11** 🔥       ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"Hii **{message.from_user.first_name}**, Main hoon **DARK GPT**💀\n\n"
-        f"Logic, Art aur Unrestricted Power! 😉\n\n"
+        f"Intelligence, Art aur No Limits! 😉\n\n"
         f"┃ *Owner: @beast\\_harry* ┃\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     status_msg = bot.reply_to(message, design, parse_mode="Markdown")
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     _, buttons, _ = loop.run_until_complete(fetch_dark_intel("/start"))
     loop.close()
-    
-    if buttons:
-        bot.edit_message_reply_markup(message.chat.id, status_msg.message_id, reply_markup=buttons)
+    if buttons: bot.edit_message_reply_markup(message.chat.id, status_msg.message_id, reply_markup=buttons)
 
 @bot.message_handler(func=lambda message: True)
 def handle_input(message):
@@ -122,9 +126,7 @@ def handle_input(message):
     final_output, buttons, photo = loop.run_until_complete(fetch_dark_intel(message.text))
     loop.close()
     
-    # --- [ THE DISPLAY SWITCH ] ---
     if photo:
-        # Photo mili toh thinking message delete karke image bhej do
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_photo(message.chat.id, photo, caption=final_output, reply_markup=buttons, parse_mode="Markdown")
     elif final_output:
@@ -133,7 +135,7 @@ def handle_input(message):
         except:
             bot.edit_message_text(final_output, message.chat.id, status_msg.message_id)
     else:
-        bot.edit_message_text("❌ Timeout: No response received.", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("❌ System Timeout: No Image/Text received.", message.chat.id, status_msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("btn_"))
 def handle_button_click(call):
@@ -144,7 +146,7 @@ def handle_button_click(call):
 
 # --- [ RENDER SETUP ] ---
 @app.route('/')
-def home(): return "DARK_GPT_ACTIVE"
+def home(): return "DARK_GPT_LIVE"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
