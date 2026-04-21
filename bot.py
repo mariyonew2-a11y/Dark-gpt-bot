@@ -3,7 +3,6 @@ import asyncio
 import re
 import os
 import time
-import io # RAM mein image save karne ke liye
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telebot import types
@@ -20,11 +19,10 @@ TARGET_BOT = "@Realwormgpt_bot"
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask('')
 
-# --- [ CLEANER & BUTTON MIRROR LOGIC ] ---
+# --- [ CLEANER & BUTTON MIRROR ] ---
 def dark_cleaner(text):
     if not text: return None
     text = re.sub(r'Worm-GPT|WormGPT|Worm GPT', 'DARK GPT', text, flags=re.IGNORECASE)
-    text = re.sub(r'@Realwormgpt_bot|@realwormgpt', '@x_dark_gpt_bot', text, flags=re.IGNORECASE)
     return text.strip()
 
 def markup_converter(reply_markup):
@@ -40,106 +38,79 @@ def markup_converter(reply_markup):
         if btns: markup.add(*btns)
     return markup if rows else None
 
-# --- [ CORE ENGINE - OSINT STYLE WITH IMAGE BUFFER ] ---
-async def fetch_dark_intel(query):
+# --- [ CORE ENGINE - FORWARD LOGIC ] ---
+async def fetch_dark_intel(query, user_chat_id):
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.connect()
     try:
+        # 1. Message bhejo
         await client.send_message(TARGET_BOT, query)
         
-        final_text = ""
-        final_btns = None
-        photo_buffer = None
-        
-        for _ in range(20): # Polling for 40 seconds
+        for _ in range(25): # Image ke liye 50 sec wait
             await asyncio.sleep(2)
             messages = await client.get_messages(TARGET_BOT, limit=1)
             if not messages: continue
             
             msg = messages[0]
-            # Content check (Text or Caption)
             raw_content = msg.text or msg.caption or ""
             
-            # Agar wahi query hai ya "Generating/Thinking" hai toh wait karo
+            # Skip Thinking
             if raw_content == query or "thinking" in str(raw_content).lower() or "⌛" in str(raw_content):
                 continue
-                
-            # --- [ IMAGE PAKADNE KA LOGIC ] ---
+            
+            # --- [ FORWARD DECISION ] ---
             if msg.photo:
-                final_text = dark_cleaner(msg.caption)
-                final_btns = markup_converter(msg.reply_markup)
+                # Seedha User ko forward kar do!
+                await client.forward_messages(user_chat_id, msg)
+                await client.disconnect()
+                return "✅ Image Forwarded Successfully!", None
                 
-                # Image ko RAM (Buffer) mein store karna
-                photo_buffer = io.BytesIO()
-                await client.download_media(msg.photo, file=photo_buffer)
-                photo_buffer.name = "dark_gpt_image.png"
-                photo_buffer.seek(0) # Buffer pointer reset
-                break
-                
-            # --- [ NORMAL TEXT PAKADNE KA LOGIC ] ---
             if raw_content:
-                final_text = dark_cleaner(raw_content)
-                final_btns = markup_converter(msg.reply_markup)
-                break
+                res = dark_cleaner(raw_content)
+                btns = markup_converter(msg.reply_markup)
+                await client.disconnect()
+                return res, btns
         
         await client.disconnect()
-        return final_text, final_btns, photo_buffer
+        return None, None
             
     except Exception as e:
         if client.is_connected(): await client.disconnect()
-        return f"❌ System Error: {str(e)}", None, None
+        return f"❌ System Error: {str(e)}", None
 
-# --- [ COMMANDS ] ---
+# --- [ HANDLERS ] ---
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
     design = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃        🔥 **DARK GPT v1.12** 🔥       ┃\n"
+        f"┃        🔥 **DARK GPT v1.13** 🔥       ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"Hii **{message.from_user.first_name}**, Main hoon **DARK GPT**💀\n\n"
-        f"Sabse khatrank AI companion bina kisi filter ke! 😉\n\n"
+        f"Forward Mode Active! Testing Image Delivery... 😉\n\n"
         f"┃ *Owner: @beast\\_harry* ┃\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    status_msg = bot.reply_to(message, design, parse_mode="Markdown")
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    _, buttons, _ = loop.run_until_complete(fetch_dark_intel("/start"))
-    loop.close()
-    
-    if buttons:
-        bot.edit_message_reply_markup(message.chat.id, status_msg.message_id, reply_markup=buttons)
+    bot.reply_to(message, design, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_input(message):
-    bot.send_chat_action(message.chat.id, 'upload_photo')
+    bot.send_chat_action(message.chat.id, 'typing')
     status_msg = bot.reply_to(message, "🛰 **DARK GPT is Decrypting...**", parse_mode="Markdown")
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    final_output, buttons, photo_data = loop.run_until_complete(fetch_dark_intel(message.text))
+    # Pass chat_id to fetch_dark_intel for forwarding
+    final_output, buttons = loop.run_until_complete(fetch_dark_intel(message.text, message.chat.id))
     loop.close()
     
-    # --- [ FINAL OUTPUT DECISION ] ---
-    if photo_data:
-        # Photo mili toh Thinking message delete karke naya photo bhej do
-        bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_photo(
-            message.chat.id, 
-            photo_data, 
-            caption=final_output if final_output else "⚡ *Image Generated by DARK GPT*", 
-            reply_markup=buttons, 
-            parse_mode="Markdown"
-        )
-    elif final_output:
+    if final_output:
         try:
             bot.edit_message_text(final_output, message.chat.id, status_msg.message_id, reply_markup=buttons, parse_mode="Markdown")
         except:
             bot.edit_message_text(final_output, message.chat.id, status_msg.message_id)
     else:
-        bot.edit_message_text("❌ Timeout: DARK GPT ne koi response nahi diya.", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("❌ Timeout: No response found.", message.chat.id, status_msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("btn_"))
 def handle_button_click(call):
@@ -150,7 +121,7 @@ def handle_button_click(call):
 
 # --- [ RENDER SETUP ] ---
 @app.route('/')
-def home(): return "DARK_GPT_ALIVE"
+def home(): return "DARK_GPT_FORWARD_ACTIVE"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
